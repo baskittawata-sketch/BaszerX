@@ -91,7 +91,8 @@ def delete_timer():
     b_id = request.form.get('id')
     if b_id in boss_registry:
         del boss_registry[b_id]
-    return jsonify({"status": "success"})
+        return jsonify({"status": "success"}) # มั่นใจว่าส่งค่ากลับไปบอกหน้าเว็บว่าลบแล้ว
+    return jsonify({"status": "error", "msg": "ไม่พบ ID บอส"})
 
 if __name__ == '__main__':
     threading.Thread(target=monitor_logic, daemon=True).start()
