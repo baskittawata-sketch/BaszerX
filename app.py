@@ -1,99 +1,70 @@
 from flask import Flask, render_template, request, jsonify
 import requests
 from datetime import datetime, timedelta
-import threading
-import time
-import uuid
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
+# --- ตั้งค่าตรงนี้ ---
 WEBHOOK_URL = 'https://discord.com/api/webhooks/1491383774423027854/nCvRzf5AC59qRiG7wQsel-Mxh7VX1uCIjuuDbgyKzcIDIgU_lHgNr1-COD3fXYqXlKkJ'
+# ------------------
 
-# ฐานข้อมูลในหน่วยความจำ {id: {data}}
+# เก็บข้อมูลบอสในหน่วยความจำ (RAM)
 boss_registry = {}
 
 def send_to_discord(content):
-    try:
-        requests.post(WEBHOOK_URL, json={"content": content})
-    except:
-        pass
-
-def monitor_logic():
-    """ตรวจสอบเวลาเกิดและแจ้งเตือนเข้าสู่ Phase 1 อัตโนมัติ"""
-    while True:
-        now = datetime.now()
-        for b_id in list(boss_registry.keys()):
-            boss = boss_registry[b_id]
-            if boss['status'] == 'COUNTING':
-                spawn_dt = datetime.fromisoformat(boss['spawn_time'])
-                if now >= spawn_dt:
-                    # เปลี่ยนสถานะเป็นเริ่มเกิด (Phase 1)
-                    boss['status'] = 'SPAWNING'
-                    boss['current_phase'] = 1
-                    send_to_discord(f"🔥 **[{boss['name']}] Ch.{boss['ch']} ถึงเวลาเกิดแล้ว!**\n⚠️ สถานะ: **PHASE 1 (เริ่มตีมอนสเตอร์)** @everyone")
-        time.sleep(5)
+    if WEBHOOK_URL and WEBHOOK_URL != 'ใส่ลิงก์ WEBHOOK ของคุณที่นี่':
+        try:
+            requests.post(WEBHOOK_URL, json={"content": content}, timeout=5)
+        except:
+            print("Discord Webhook Error")
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/timers')
-def get_timers():
-    # ส่งข้อมูลบอสทั้งหมดและเรียงลำดับเวลา
-    timers = list(boss_registry.values())
-    timers.sort(key=lambda x: x['spawn_time'])
-    return jsonify(timers)
-
 @app.route('/set_timer', methods=['POST'])
 def set_timer():
-    b_id = request.form.get('id') or str(uuid.uuid4())
-    name = request.form.get('name')
-    ch = request.form.get('ch')
-    cd_val = request.form.get('cd')
+    boss_name = request.form.get('boss_name')
+    channel = request.form.get('channel')
+    minutes = float(request.form.get('minutes', 0))
     
-    now = datetime.now()
-    # กฎเวลา: มีจุด = ชม. / ไม่มีจุด = นาที
-    if '.' in cd_val:
-        h, m = map(int, cd_val.split('.'))
-        spawn_dt = now + timedelta(hours=h, minutes=m)
-    else:
-        spawn_dt = now + timedelta(minutes=int(cd_val))
+    # คำนวณเวลาเกิด (UTC+7)
+    spawn_time = datetime.now() + timedelta(minutes=minutes)
+    boss_id = f"{boss_name}_{channel}_{int(spawn_time.timestamp())}"
     
-    boss_registry[b_id] = {
-        "id": b_id,
-        "name": name,
-        "ch": ch,
-        "spawn_time": spawn_dt.isoformat(),
-        "status": "COUNTING",
-        "current_phase": 0
+    boss_registry[boss_id] = {
+        "id": boss_id,
+        "name": boss_name,
+        "channel": channel,
+        "spawn_time": spawn_time.isoformat(),
+        "status": "waiting"
     }
-    return jsonify({"status": "success"})
-
-@app.route('/update_phase', methods=['POST'])
-def update_phase():
-    b_id = request.form.get('id')
-    phase = int(request.form.get('phase'))
     
-    if b_id in boss_registry:
-        boss = boss_registry[b_id]
-        boss['current_phase'] = phase
-        boss['status'] = 'SPAWNING' # มั่นใจว่าเป็นสถานะกำลังเกิด
-        
-        # ส่งแจ้งเตือน Phase ใหม่เข้า Discord
-        emoji = ["", "🟢", "🟡", "🟠", "🔴"]
-        send_to_discord(f"{emoji[phase]} **อัปเดตสถานะ:** [{boss['name']}] (Ch.{boss['ch']}) เข้าสู่ **PHASE {phase}**")
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"})
+    send_to_discord(f"📌 **จดบอส:** {boss_name} (Ch.{channel}) จะเกิดในอีก {minutes} นาที")
+    return jsonify({"status": "success", "boss_id": boss_id})
+
+@app.route('/get_timers')
+def get_timers():
+    # ส่งข้อมูลบอสทั้งหมดไปแสดงผลที่หน้าเว็บ
+    return jsonify(list(boss_registry.values()))
 
 @app.route('/delete_timer', methods=['POST'])
 def delete_timer():
-    b_id = request.form.get('id')
-    if b_id in boss_registry:
-        del boss_registry[b_id]
-        return jsonify({"status": "success"}) # มั่นใจว่าส่งค่ากลับไปบอกหน้าเว็บว่าลบแล้ว
-    return jsonify({"status": "error", "msg": "ไม่พบ ID บอส"})
+    boss_id = request.form.get('id')
+    if boss_id in boss_registry:
+        del boss_registry[boss_id]
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "ไม่พบข้อมูลบอส"})
+
+@app.route('/notify_born', methods=['POST'])
+def notify_born():
+    boss_id = request.form.get('id')
+    if boss_id in boss_registry:
+        boss = boss_registry[boss_id]
+        if boss['status'] == 'waiting':
+            boss['status'] = 'born'
+            send_to_discord(f"🚨 **BORN!!** {boss['name']} (Ch.{boss['channel']}) เกิดแล้ว!")
+    return jsonify({"status": "success"})
 
 if __name__ == '__main__':
-    threading.Thread(target=monitor_logic, daemon=True).start()
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
