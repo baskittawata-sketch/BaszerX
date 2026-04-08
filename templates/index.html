@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>TOSM Phase Tracker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: sans-serif; background: #1a1c1e; color: white; padding: 15px; display: flex; flex-direction: column; align-items: center; }
+        .card { background: #2f3136; padding: 20px; border-radius: 12px; width: 100%; max-width: 450px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        input { background: #202225; color: white; border: 1px solid #444; padding: 12px; border-radius: 6px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        .boss-item { background: #36393f; padding: 15px; border-radius: 8px; border-left: 6px solid #5865f2; margin-bottom: 10px; width: 100%; max-width: 450px; }
+        .phase-box { display: flex; gap: 5px; margin-top: 10px; }
+        .btn-p { flex: 1; padding: 10px; border: none; border-radius: 4px; color: white; cursor: pointer; font-weight: bold; }
+        .p1 { background: #43b581; } .p2 { background: #faa61a; } .p3 { background: #f26522; } .p4 { background: #f04747; }
+        .btn-edit { background: #7289da; padding: 5px 10px; border: none; border-radius: 4px; color: white; cursor: pointer; font-size: 12px; }
+        .btn-del { background: #4f545c; float: right; padding: 5px 10px; border: none; border-radius: 4px; color: white; cursor: pointer; }
+        .timer-text { font-size: 32px; color: #f1c40f; font-weight: bold; }
+        .spawning { color: #f04747; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h3 id="title">⏲️ บันทึกบอส</h3>
+        <input type="hidden" id="b_id">
+        <input type="text" id="name" placeholder="ชื่อบอส">
+        <input type="text" id="ch" placeholder="Channel">
+        <input type="text" id="cd" placeholder="เวลา (1=นาที / 1.0=ชม.)">
+        <button onclick="saveBoss()" style="width: 100%; padding: 15px; background: #5865f2; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px;">บันทึกข้อมูล</button>
+    </div>
+
+    <div id="list" style="width: 100%; max-width: 450px;"></div>
+
+    <script>
+        async function saveBoss() {
+            const fd = new FormData();
+            fd.append('id', document.getElementById('b_id').value);
+            fd.append('name', document.getElementById('name').value);
+            fd.append('ch', document.getElementById('ch').value);
+            fd.append('cd', document.getElementById('cd').value);
+            await fetch('/set_timer', { method: 'POST', body: fd });
+            clearForm();
+            refreshList();
+        }
+
+        function clearForm() {
+            document.getElementById('b_id').value = '';
+            document.getElementById('name').value = '';
+            document.getElementById('ch').value = '';
+            document.getElementById('cd').value = '';
+            document.getElementById('title').innerText = "⏲️ บันทึกบอส";
+        }
+
+        function editBoss(id, name, ch) {
+            document.getElementById('b_id').value = id;
+            document.getElementById('name').value = name;
+            document.getElementById('ch').value = ch;
+            document.getElementById('title').innerText = "✏️ แก้ไข: " + name;
+            window.scrollTo(0,0);
+        }
+
+        async function updatePhase(id, p) {
+            const fd = new FormData();
+            fd.append('id', id); fd.append('phase', p);
+            await fetch('/update_phase', { method: 'POST', body: fd });
+            refreshList();
+        }
+
+        async function deleteBoss(id) {
+            const fd = new FormData(); fd.append('id', id);
+            await fetch('/delete_timer', { method: 'POST', body: fd });
+            refreshList();
+        }
+
+        async function refreshList() {
+            const res = await fetch('/api/timers');
+            const data = await res.json();
+            const list = document.getElementById('list');
+            list.innerHTML = '';
+
+            data.forEach(b => {
+                const isSpawning = b.status === 'SPAWNING';
+                const item = document.createElement('div');
+                item.className = 'boss-item';
+                item.innerHTML = `
+                    <button class="btn-del" onclick="deleteBoss('${b.id}')">ลบ</button>
+                    <div class="timer-text ${isSpawning ? 'spawning' : ''}" id="timer-${b.id}">--:--:--</div>
+                    <strong>${b.name} (Ch.${b.ch})</strong> 
+                    <span style="background:#5865f2; padding:2px 5px; border-radius:4px; font-size:11px;">
+                        ${isSpawning ? 'PHASE ' + b.current_phase : 'รอเวลา'}
+                    </span>
+                    <div class="phase-box">
+                        <button class="btn-edit" onclick="editBoss('${b.id}','${b.name}','${b.ch}')">แก้ไขเวลา</button>
+                        ${isSpawning ? `
+                            <button class="btn-p p1" onclick="updatePhase('${b.id}',1)">P1</button>
+                            <button class="btn-p p2" onclick="updatePhase('${b.id}',2)">P2</button>
+                            <button class="btn-p p3" onclick="updatePhase('${b.id}',3)">P3</button>
+                            <button class="btn-p p4" onclick="updatePhase('${b.id}',4)">P4</button>
+                        ` : ''}
+                    </div>
+                `;
+                list.appendChild(item);
+                if (!isSpawning) startCountdown(b.id, b.spawn_time);
+                else document.getElementById('timer-'+b.id).innerText = "BORN!";
+            });
+        }
+
+        function startCountdown(id, targetStr) {
+            const el = document.getElementById('timer-'+id);
+            const target = new Date(targetStr);
+            const update = () => {
+                const diff = target - new Date();
+                if (diff <= 0) { refreshList(); return; }
+                const h = Math.floor(diff/3600000);
+                const m = Math.floor((diff%3600000)/60000);
+                const s = Math.floor((diff%60000)/1000);
+                el.innerText = `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            };
+            update();
+            const timer = setInterval(() => {
+                if (!document.getElementById('timer-'+id)) { clearInterval(timer); return; }
+                update();
+            }, 1000);
+        }
+
+        refreshList();
+        setInterval(refreshList, 15000);
+    </script>
+</body>
+</html>
